@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### 2026-08-18 — 阶段 3：Herdr Agent Adapter
+
+#### 新增
+
+- `src/herdr/types.ts`：`AgentStatus`、`AgentInfo`、`HerdrError`、`PromptOutcome` 与 `classifyErrorCode`（timeout/stalled/exited 等错误分类）。
+- `src/herdr/adapter.ts`：`HerdrAgentAdapter`，封装 `pane split`、`agent list/get/start/prompt/wait/read`，解析 Herdr 的 `{result}`/`{error:{code,message}}` JSON 信封，区分 spawn/protocol/超时等失败。
+- `src/spawn.ts`：`RunnerOptions` 增加 `env`；`SpawnResult` 增加 `timedOut`，使超时在适配层可分类。
+- `tests/integration/fixtures/fake-herdr.mjs`：场景驱动的假 `herdr` 可执行文件。
+- `tests/integration/herdr-adapter.test.ts`、`tests/unit/herdr.test.ts`。
+
+#### 原因
+
+- 按 `DESIGN.md` 阶段 3 建立通过官方 `herdr` CLI 调用 Agent 的适配层，不解析私有 socket 协议，为阶段 4 双 Agent 审查提供稳定接口。
+
+#### 验证
+
+- `pnpm test`：9 个测试文件、73 个用例全部通过（新增 19 个）。
+- 假 `herdr` 集成测试覆盖：完成（done）、阻塞（blocked）、退出（exit）、超时（timeout），以及 pane split、start、list、get、read、wait。
+- `pnpm typecheck`：无错误；`pnpm build`：生成 `dist/cli.js`（19.64 KB）。
+
+#### 下一位维护者注意
+
+- 实测 Herdr 0.8.0：`agent list`/`get` 返回 `{result}`/`{error:{code,message}}` 信封；`agent read` 返回纯文本（非 JSON）；`prompt` 用 `--wait --until --timeout`，错误码为 `timeout`、`agent_prompt_stalled`、`agent_not_found`。
+- `agent start`/`prompt`/`wait` 的成功返回结构按 `result.agent` 推断（未对真实 Agent 跑突变命令），阶段 4 端到端时需再次确认；如有偏差按 §15 修正。
+- 适配器默认通过 `HERDR_BIN_PATH ?? "herdr"` 定位二进制，支持注入 `env`（用于 `HERDR_PLUGIN_CONTEXT_JSON` 等上下文）。
+- `prompt` 默认超时 600s 并始终传 `--timeout`，避免 `--wait` 无限挂起；`read` 失败在结果中按 best-effort 处理。
+
 ### 2026-08-18 — 阶段 2：状态存储与运行状态机
 
 #### 新增

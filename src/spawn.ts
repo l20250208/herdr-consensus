@@ -2,11 +2,12 @@ import { spawn, type ChildProcess, type SpawnOptions as NodeSpawnOptions } from 
 
 export type SpawnResult =
   | { ok: true; code: number; stdout: string; stderr: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; timedOut?: boolean };
 
 export interface RunnerOptions {
   cwd?: string;
   timeoutMs?: number;
+  env?: Record<string, string | undefined>;
 }
 
 /**
@@ -37,6 +38,9 @@ export function spawnRunner(argv: readonly string[], options: RunnerOptions = {}
     if (options.cwd !== undefined) {
       spawnOptions.cwd = options.cwd;
     }
+    if (options.env !== undefined) {
+      spawnOptions.env = { ...process.env, ...options.env };
+    }
 
     let child: ChildProcess;
     try {
@@ -57,7 +61,7 @@ export function spawnRunner(argv: readonly string[], options: RunnerOptions = {}
 
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      settle({ ok: false, error: `timed out after ${timeoutMs}ms` });
+      settle({ ok: false, error: `timed out after ${timeoutMs}ms`, timedOut: true });
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => {
