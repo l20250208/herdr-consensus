@@ -3,6 +3,10 @@ import { pathToFileURL } from "node:url";
 import { spawnRunner, type Runner } from "./spawn.js";
 import { runDoctor } from "./env.js";
 import { formatDoctorReport } from "./commands/doctor.js";
+import { formatRunList, formatRunStatus } from "./commands/status.js";
+import { formatResume } from "./commands/resume.js";
+import { stateRoot } from "./state/paths.js";
+import { RunStore } from "./state/store.js";
 
 export const PLUGIN_VERSION = "0.1.0";
 
@@ -10,6 +14,8 @@ export interface CliDeps {
   run: Runner;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
+  /** State directory override, used by tests to isolate run storage. */
+  stateDir?: string;
 }
 
 export interface ParsedArgv {
@@ -23,8 +29,6 @@ export interface ParsedArgv {
 const PLANNED_STAGES: Record<string, string> = {
   start: "stage 4 (dual-agent review)",
   import: "stage 4 (dual-agent review)",
-  status: "stage 2 (state store)",
-  resume: "stage 2 (state store)",
   validate: "stage 6 (P2 validation)",
   arbitrate: "stage 7 (third-AI arbitration)",
   decide: "stage 8 (decision wizard)",
@@ -44,8 +48,8 @@ Commands:
   doctor       Check Herdr, Node.js, Git and agent availability
   start        Start a new consensus review          (not implemented)
   import       Import two existing reports           (not implemented)
-  status       Show run status                       (not implemented)
-  resume       Resume a run                          (not implemented)
+  status       Show run status
+  resume       Resume a run
   validate     Run P2 validation                     (not implemented)
   arbitrate    Run third-AI arbitration              (not implemented)
   decide       Open the decision wizard               (not implemented)
@@ -100,6 +104,14 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
     return report.ok ? 0 : 1;
   }
 
+  if (parsed.command === "status") {
+    return runStatusCommand(parsed.args, parsed.json, deps);
+  }
+
+  if (parsed.command === "resume") {
+    return runResumeCommand(parsed.args, parsed.json, deps);
+  }
+
   const planned = PLANNED_STAGES[parsed.command];
   if (planned !== undefined) {
     deps.stderr(`${pc.yellow(`"${parsed.command}" is not implemented yet`)} (${planned}).\n`);
@@ -109,6 +121,67 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
   deps.stderr(`${pc.red(`unknown command: ${parsed.command}`)}\n`);
   deps.stderr(USAGE);
   return 2;
+}
+
+function makeStore(deps: CliDeps): RunStore {
+  return new RunStore(deps.stateDir ?? stateRoot());
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function runStatusCommand(
+  args: readonly string[],
+  json: boolean,
+  deps: CliDeps,
+): Promise<number> {
+  const store = makeStore(deps);
+  const runId = args[0];
+  if (runId === undefined) {
+    const runs = await store.listRuns();
+    deps.stdout(json ? `${JSON.stringify(runs, null, 2)}\n` : formatRunList(runs));
+    return 0;
+  }
+  try {
+    const run = await store.findRunById(runId);
+    if (run === null) {
+      deps.stderr(`no run found with id ${runId}\n`);
+      return 1;
+    }
+    deps.stdout(json ? `${JSON.stringify(run, null, 2)}\n` : formatRunStatus(run));
+    return 0;
+  } catch (error) {
+    deps.stderr(`failed to load run ${runId}: ${errorMessage(error)}\n`);
+    return 1;
+  }
+}
+
+async function runResumeCommand(
+  args: readonly string[],
+  json: boolean,
+  deps: CliDeps,
+): Promise<number> {
+  const store = makeStore(deps);
+  const runId = args[0];
+  if (runId === undefined) {
+    const runs = await store.listRuns();
+    deps.stderr("resume requires a run id\n");
+    deps.stderr(formatRunList(runs));
+    return 2;
+  }
+  try {
+    const run = await store.findRunById(runId);
+    if (run === null) {
+      deps.stderr(`no run found with id ${runId}\n`);
+      return 1;
+    }
+    deps.stdout(json ? `${JSON.stringify(run, null, 2)}\n` : formatResume(run));
+    return 0;
+  } catch (error) {
+    deps.stderr(`failed to load run ${runId}: ${errorMessage(error)}\n`);
+    return 1;
+  }
 }
 
 function isMainModule(): boolean {
