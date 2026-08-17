@@ -1,0 +1,31 @@
+{
+  "name": "herdr-consensus",
+  "version": "0.1.0",
+  "description": "Multi-agent review consensus and human adjudication layer for Herdr.",
+  "type": "module",
+  "bin": {
+    "herdr-consensus": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.5.2",
+    "picocolors": "^1.1.1",
+    "smol-toml": "^1.8.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "fast-check": "^4.9.0",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

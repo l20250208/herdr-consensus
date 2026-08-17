@@ -1,0 +1,40 @@
+id = "herdr.herdr-consensus"
+name = "herdr-consensus"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Turn two independent coding-agent reviews of the same project into one verifiable, adjudicable, traceable fix plan."
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["pnpm", "install", "--frozen-lockfile"]
+
+[[build]]
+command = ["pnpm", "run", "build"]
+
+[[actions]]
+id = "new-review"
+title = "New consensus review"
+description = "Start a new dual-agent review of the current workspace."
+contexts = ["workspace"]
+command = ["node", "dist/cli.js", "start"]
+
+[[actions]]
+id = "resume-review"
+title = "Resume consensus review"
+description = "Pick an unfinished run and continue."
+contexts = ["workspace"]
+command = ["node", "dist/cli.js", "resume"]
+
+[[actions]]
+id = "open-decision-wizard"
+title = "Open decision wizard"
+description = "Adjudicate findings one by one."
+contexts = ["workspace"]
+command = ["node", "dist/cli.js", "decide"]
+
+[[actions]]
+id = "open-final-report"
+title = "Open final report"
+description = "Open the latest unified report."
+contexts = ["workspace"]
+command = ["node", "dist/cli.js", "report"]
