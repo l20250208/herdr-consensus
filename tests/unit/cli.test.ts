@@ -88,7 +88,7 @@ describe("main", () => {
 
   it("reports not-implemented commands to stderr and exits 2", async () => {
     const { deps, err } = makeDeps();
-    const code = await main(["start"], deps);
+    const code = await main(["validate"], deps);
     expect(code).toBe(2);
     expect(err()).toContain("not implemented");
   });

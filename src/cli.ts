@@ -5,8 +5,18 @@ import { runDoctor } from "./env.js";
 import { formatDoctorReport } from "./commands/doctor.js";
 import { formatRunList, formatRunStatus } from "./commands/status.js";
 import { formatResume } from "./commands/resume.js";
-import { stateRoot } from "./state/paths.js";
+import { readFileSync, realpathSync } from "node:fs";
+import { runDir as buildRunDir, stateRoot } from "./state/paths.js";
+import { generateRunId } from "./state/run.js";
 import { RunStore } from "./state/store.js";
+import { HerdrAgentAdapter } from "./herdr/adapter.js";
+import {
+  ReviewCollector,
+  type CollectedReview,
+  type ReviewAgentGateway,
+} from "./reports/collector.js";
+import { importReports } from "./reports/import.js";
+import { saveRawReports } from "./reports/storage.js";
 
 export const PLUGIN_VERSION = "0.1.0";
 
@@ -16,6 +26,8 @@ export interface CliDeps {
   stderr: (text: string) => void;
   /** State directory override, used by tests to isolate run storage. */
   stateDir?: string;
+  /** Review gateway override, used by tests to avoid launching real agents. */
+  gateway?: ReviewAgentGateway;
 }
 
 export interface ParsedArgv {
@@ -27,8 +39,6 @@ export interface ParsedArgv {
 }
 
 const PLANNED_STAGES: Record<string, string> = {
-  start: "stage 4 (dual-agent review)",
-  import: "stage 4 (dual-agent review)",
   validate: "stage 6 (P2 validation)",
   arbitrate: "stage 7 (third-AI arbitration)",
   decide: "stage 8 (decision wizard)",
@@ -46,8 +56,8 @@ Usage:
 
 Commands:
   doctor       Check Herdr, Node.js, Git and agent availability
-  start        Start a new consensus review          (not implemented)
-  import       Import two existing reports           (not implemented)
+  start        Start a new consensus review
+  import       Import two existing reports
   status       Show run status
   resume       Resume a run
   validate     Run P2 validation                     (not implemented)
@@ -110,6 +120,14 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
 
   if (parsed.command === "resume") {
     return runResumeCommand(parsed.args, parsed.json, deps);
+  }
+
+  if (parsed.command === "start") {
+    return runStartCommand(parsed.args, parsed.json, deps);
+  }
+
+  if (parsed.command === "import") {
+    return runImportCommand(parsed.args, parsed.json, deps);
   }
 
   const planned = PLANNED_STAGES[parsed.command];
@@ -182,6 +200,129 @@ async function runResumeCommand(
     deps.stderr(`failed to load run ${runId}: ${errorMessage(error)}\n`);
     return 1;
   }
+}
+
+function parseAgentFlags(args: readonly string[]): { agentA: string | null; agentB: string | null } {
+  let agentA: string | null = null;
+  let agentB: string | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token === "--agent-a") {
+      const next = args[i + 1];
+      if (next !== undefined) {
+        agentA = next;
+        i++;
+      }
+    } else if (token === "--agent-b") {
+      const next = args[i + 1];
+      if (next !== undefined) {
+        agentB = next;
+        i++;
+      }
+    }
+  }
+  return { agentA, agentB };
+}
+
+function formatCollectSummary(runId: string, result: CollectedReview): string {
+  const lines = [`Started review ${pc.cyan(runId)}`];
+  for (const outcome of result.outcomes) {
+    const mark =
+      outcome.kind === "collected"
+        ? pc.green(outcome.kind)
+        : outcome.kind === "blocked" || outcome.kind === "invalid"
+          ? pc.yellow(outcome.kind)
+          : pc.red(outcome.kind);
+    const detail = outcome.detail !== null ? ` — ${outcome.detail}` : "";
+    lines.push(`  ${outcome.slot}: ${mark}${detail}`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+async function runStartCommand(args: readonly string[], json: boolean, deps: CliDeps): Promise<number> {
+  const { agentA, agentB } = parseAgentFlags(args);
+  if (agentA === null || agentB === null) {
+    deps.stderr("start requires --agent-a <kind> and --agent-b <kind>\n");
+    return 2;
+  }
+  if (agentA === agentB) {
+    deps.stderr("start requires two different agents\n");
+    return 2;
+  }
+
+  const root = deps.stateDir ?? stateRoot();
+  const store = new RunStore(root);
+  const projectPath = realpathSync(process.cwd());
+  const runId = generateRunId();
+  await store.createRun({ runId, projectPath });
+  await store.transition(runId, "reviewing");
+
+  const gateway = deps.gateway ?? new HerdrAgentAdapter({ run: deps.run });
+  const collector = new ReviewCollector(gateway);
+  const result = await collector.collect({
+    projectPath,
+    cwd: process.cwd(),
+    sources: [
+      { slot: "a", kind: agentA, name: "reviewer-a" },
+      { slot: "b", kind: agentB, name: "reviewer-b" },
+    ],
+  });
+
+  const run = await store.findRunById(runId);
+  if (run !== null) {
+    await saveRawReports(buildRunDir(root, run.projectHash, run.runId), result.artifacts);
+  }
+
+  if (json) {
+    deps.stdout(
+      `${JSON.stringify({ runId, contractVersion: result.contractVersion, outcomes: result.outcomes }, null, 2)}\n`,
+    );
+  } else {
+    deps.stdout(formatCollectSummary(runId, result));
+  }
+
+  return result.outcomes.every((outcome) => outcome.kind === "collected") ? 0 : 1;
+}
+
+async function runImportCommand(args: readonly string[], json: boolean, deps: CliDeps): Promise<number> {
+  const { agentA, agentB } = parseAgentFlags(args);
+  if (agentA === null || agentB === null) {
+    deps.stderr("import requires --agent-a <file> and --agent-b <file>\n");
+    return 2;
+  }
+
+  let contentA: string;
+  let contentB: string;
+  try {
+    contentA = readFileSync(agentA, "utf8");
+    contentB = readFileSync(agentB, "utf8");
+  } catch (error) {
+    deps.stderr(`failed to read report: ${errorMessage(error)}\n`);
+    return 1;
+  }
+
+  const root = deps.stateDir ?? stateRoot();
+  const store = new RunStore(root);
+  const projectPath = realpathSync(process.cwd());
+  const runId = generateRunId();
+  await store.createRun({ runId, projectPath });
+  await store.transition(runId, "reviewing");
+
+  const artifacts = importReports({ a: contentA, b: contentB });
+  const run = await store.findRunById(runId);
+  if (run !== null) {
+    await saveRawReports(buildRunDir(root, run.projectHash, run.runId), artifacts);
+  }
+
+  if (json) {
+    deps.stdout(
+      `${JSON.stringify({ runId, artifacts: { a: artifacts.a.sha256, b: artifacts.b.sha256 } }, null, 2)}\n`,
+    );
+  } else {
+    deps.stdout(`Imported review ${pc.cyan(runId)} (2 reports)\n`);
+  }
+  return 0;
 }
 
 function isMainModule(): boolean {

@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+### 2026-08-18 — 阶段 4：双 Agent 独立审查
+
+#### 新增
+
+- `src/reports/contract.ts`：版本化的只读审查契约（统一 prompt），含唯一 JSON 标记与输出格式说明。
+- `src/reports/artifact.ts`：`RawReportArtifact` 与 `sha256Hex`/`makeArtifact`。
+- `src/reports/extract.ts`：标记间 JSON 提取、轻量报告校验、格式修复 prompt。
+- `src/reports/collector.ts`：`ReviewCollector`，并行启动两名审查者、收集原始报告，无效 JSON 恰好一次修复后放弃并保留原文。
+- `src/reports/import.ts`：导入两份已有报告为 import 来源的 artifact。
+- `src/reports/storage.ts`：把原始报告写入 `<run>/raw/{a,b}.txt` 与 `manifest.json`。
+- `src/cli.ts`：接入 `start`/`import` 命令（`--agent-a`/`--agent-b`），创建 run、推进到 `reviewing`、保存原始报告。
+- `prompts/independent-review.md`：审查契约的人读文档。
+- 测试：`tests/unit/{contract,extract,artifact,collector,import,storage}.test.ts`、`tests/unit/cli-review.test.ts`。
+
+#### 原因
+
+- 按 `DESIGN.md` 阶段 4 实现双 Agent 独立只读审查的入口与原始报告收集；两名 Agent 使用同一契约且互不可见，无效 JSON 仅一次修复机会。
+
+#### 验证
+
+- `pnpm test`：16 个测试文件、102 个用例全部通过（新增 29 个）。
+- `pnpm typecheck`：无错误；`pnpm build`：`dist/cli.js`（38.91 KB）。
+- 实机冒烟：`start`（缺参数）退出码 2；`import` 创建 run 并写入 `run.json`、`raw/{a,b}.txt`、`raw/manifest.json`。
+
+#### 下一位维护者注意
+
+- 导入报告的 `sourceId`/`agentKind` 均为 `"import"`，两个槽位用 `raw/a.txt`/`raw/b.txt` 与返回的 `Record<Slot, ...>` 区分；阶段 5 归一化时按 a/b 槽位消费。
+- 修复成功时 artifact 内容为修复后的输出，失败时为原始输出；sha256 始终针对该 content。
+- 实机 `start` 会真实分裂 pane 并启动 Agent（未在本阶段冒烟，留待阶段 12 e2e）；`ReviewCollector` 通过 `ReviewAgentGateway` 接口注入，测试用假 gateway。
+- 运行阶段：`start`/`import` 把 run 推进到 `reviewing`；阶段 5 读取 `raw/` 完成归一化后推进到 `normalized`。
+
 ### 2026-08-18 — 阶段 3：Herdr Agent Adapter
 
 #### 新增
