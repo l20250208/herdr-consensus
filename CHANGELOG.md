@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 
+### 2026-08-18 — 阶段 5：标准化与共识引擎
+
+#### 新增
+
+- `src/consensus/types.ts`：`Severity`/`EvidenceTier`/`SourceLocation`/`NormalizedFinding`/`ConsensusItem` 稳定契约，`SEVERITY_ORDER`、`higherSeverity`。
+- `src/consensus/severity.ts`：自由文本严重程度 → P0–P3（未知默认 P2）。
+- `src/consensus/path.ts`：绝对/相对路径转仓库相对路径，拒绝 `..` 越界与仓库外路径。
+- `src/consensus/text.ts`：token 化与 Jaccard 相似度。
+- `src/consensus/normalizer.ts`：Zod 校验 + 归一化（严重程度映射、路径归一化、原始等级保留、逐条跳过非法项）。
+- `src/consensus/matcher.ts`：确定性匹配（同文件 + 行区间重叠）+ 加权相似度（路径 .30 / 位置符号 .20 / 类别 .15 / 标题根因 .25 / 修复 .10）。
+- `src/consensus/dispute.ts`：严重程度差两级以上、根因/修复互斥、保护 vs 可利用冲突检测。
+- `src/consensus/engine.ts`：`runConsensus` 生成 common/single_source/possible_match/disputed 的 `ConsensusItem[]`。
+- `schemas/review-report.v1.json`：审查报告的 JSON Schema 文档。
+- 测试：`tests/unit/{severity,path,normalizer,matcher,dispute,consensus}.test.ts`、`tests/unit/consensus.property.test.ts`（fast-check）、`tests/unit/finding-helper.ts`。
+
+#### 原因
+
+- 按 `DESIGN.md` 阶段 5 把两份原始报告标准化为 `NormalizedFinding` 并计算稳定的交集/单方/可能相同/分歧快照，为阶段 6 验证与阶段 7 仲裁提供输入。
+
+#### 验证
+
+- `pnpm test`：23 个测试文件、133 个用例全部通过（新增 31 个，含 fast-check 性质测试）。
+- `pnpm typecheck`：无错误；`pnpm build`：`dist/cli.js`（38.91 KB）。
+- 性质测试覆盖：相似度对称且 ∈[0,1]、确定性匹配对称、路径归一化不含 `..` 段、`runConsensus` 对每个 finding 恰好分区一次。
+
+#### 下一位维护者注意
+
+- 确定性匹配解释为“同文件 + 行区间重叠”；符号/类别/错误标识折叠进相似度权重。阈值 ≥0.80 合并、0.55–0.79 possible_match、<0.55 单方。
+- “根因/修复互斥”用 token 零重叠启发式（保守：误判会路由到阶段 7 仲裁，符合“宁交用户确认”）；纯语义的存在/不存在与保护冲突留待阶段 7 第三方 AI。
+- 归一化 `evidenceTier` 默认 `agent_asserted`，共识合并后升为 `corroborated`；`needsRuntimeValidation` 仅对 P2 置真。
+- 未接入 CLI（`normalize`/`consensus` 尚无可独立运行命令），阶段 6/7 会在 run 流程中调用这些模块并写 `consensus.json`。
+
 ### 2026-08-18 — 阶段 4：双 Agent 独立审查
 
 #### 新增

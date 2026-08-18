@@ -1,8 +1,8 @@
 # Herdr Consensus 设计与实施文档
 
 > 文档状态：已批准，实现中  
-> 当前阶段：阶段 4 — 双 Agent 独立审查（已完成）  
-> 下一阶段：阶段 5 — 标准化与共识引擎  
+> 当前阶段：阶段 5 — 标准化与共识引擎（已完成）  
+> 下一阶段：阶段 6 — P2 验证系统  
 > 最后更新：2026-08-18
 
 ## 1. 项目摘要
@@ -577,7 +577,7 @@ herdr-consensus/
 | 2. 状态存储和运行状态机 | 已完成 | 原子 JSON store、run schema、审计事件、resume | 崩溃 fixture 可恢复；重复执行不破坏状态 |
 | 3. Herdr Agent Adapter | 已完成 | pane/agent start、prompt、wait、read、错误分类 | fake Herdr 集成测试覆盖完成/阻塞/退出/超时 |
 | 4. 双 Agent 独立审查 | 已完成 | 统一 prompt、并行运行、原始报告收集、导入模式 | 两 Agent 互不可见；无效 JSON 有一次修复机会 |
-| 5. 标准化与共识引擎 | 未开始 | schema、normalizer、matcher、dispute detector | fixture 交集/分歧稳定；性质测试通过 |
+| 5. 标准化与共识引擎 | 已完成 | schema、normalizer、matcher、dispute detector | fixture 交集/分歧稳定；性质测试通过 |
 | 6. P2 验证系统 | 未开始 | 命令计划、批准界面、安全执行、证据记录 | 危险命令被阻止；通过/失败/不确定正确归类 |
 | 7. 第三方 AI 建议 | 未开始 | 推荐/替换 Agent、只读仲裁 prompt、建议解析 | 不改代码；来源、模型、置信度和证据完整记录 |
 | 8. 用户逐项裁决向导 | 未开始 | 交互 UI、决定持久化、返回补验证 | 可恢复；每项决定绑定证据快照 |
