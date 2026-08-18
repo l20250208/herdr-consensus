@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { main, type CliDeps } from "../../src/cli.js";
 import { RunStore } from "../../src/state/store.js";
 import type { Runner } from "../../src/spawn.js";
+import { makeArtifact } from "../../src/reports/artifact.js";
+import { saveRawReports } from "../../src/reports/storage.js";
+import { runDir } from "../../src/state/paths.js";
 
 const tmpRoots: string[] = [];
 
@@ -65,14 +68,22 @@ describe("status command", () => {
 });
 
 describe("resume command", () => {
-  it("prints the stage to resume from", async () => {
+  it("continues a reviewing run and prints the next command", async () => {
     const root = await tempRoot();
-    await new RunStore(root).createRun({ runId: "run-1", projectPath: "/tmp/repo" });
+    const store = new RunStore(root);
+    const created = await store.createRun({ runId: "run-1", projectPath: "/tmp/repo" });
+    const reviewing = await store.transition(created.runId, "reviewing");
+    const content = JSON.stringify({ schemaVersion: 1, findings: [] });
+    await saveRawReports(runDir(root, reviewing.projectHash, reviewing.runId), {
+      a: makeArtifact({ sourceId: "agent_a", agentKind: "claude", content }),
+      b: makeArtifact({ sourceId: "agent_b", agentKind: "codex", content }),
+    });
     const { deps, out } = makeDeps(root);
     const code = await main(["resume", "run-1"], deps);
     expect(code).toBe(0);
     expect(out()).toContain("run-1");
-    expect(out()).toContain("created");
+    expect(out()).toContain("consensus");
+    expect(out()).toContain("validate run-1");
   });
 
   it("exits 2 when no run id is given", async () => {

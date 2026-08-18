@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ReviewCollector, type ReviewAgentGateway, type ReviewSource } from "../../src/reports/collector.js";
 import { DEFAULT_MARKERS } from "../../src/reports/contract.js";
 import { sha256Hex } from "../../src/reports/artifact.js";
@@ -6,6 +9,11 @@ import type { AgentInfo, PromptInput, PromptOutcome, StartAgentInput } from "../
 
 const VALID_JSON = JSON.stringify({ schemaVersion: 1, findings: [{ title: "x" }] });
 const INVALID_OUTPUT = `${DEFAULT_MARKERS.start}\n{ not valid json\n${DEFAULT_MARKERS.end}\n`;
+const tmpRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tmpRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 function done(output: string): PromptOutcome {
   return { kind: "done", status: "idle", output };
@@ -19,6 +27,10 @@ function exited(message: string): PromptOutcome {
   return { kind: "exited", message };
 }
 
+function stalled(output: string): PromptOutcome {
+  return { kind: "stalled", output, message: "no observed state change" };
+}
+
 class FakeGateway implements ReviewAgentGateway {
   readonly prompts: Array<{ name: string; text: string }> = [];
   maxActive = 0;
@@ -27,6 +39,7 @@ class FakeGateway implements ReviewAgentGateway {
 
   constructor(
     private readonly script: (name: string, call: number) => PromptOutcome,
+    private readonly startedName: (requested: string) => string = (requested) => requested,
   ) {}
 
   async splitPane(): Promise<{ paneId: string }> {
@@ -34,7 +47,7 @@ class FakeGateway implements ReviewAgentGateway {
   }
 
   async startAgent(input: StartAgentInput): Promise<AgentInfo> {
-    return { name: input.name, status: "idle", paneId: input.paneId, workspaceId: "w9", tabId: "t9" };
+    return { name: this.startedName(input.name), status: "idle", paneId: input.paneId, workspaceId: "w9", tabId: "t9" };
   }
 
   async prompt(input: PromptInput): Promise<PromptOutcome> {
@@ -85,6 +98,63 @@ describe("ReviewCollector", () => {
     expect(gateway.maxActive).toBe(2);
   });
 
+  it("uses the stable name returned by Herdr for review and repair prompts", async () => {
+    const gateway = new FakeGateway(
+      (_name, call) => call === 0 ? done(INVALID_OUTPUT) : done(`${DEFAULT_MARKERS.start}\n${VALID_JSON}\n${DEFAULT_MARKERS.end}\n`),
+      (requested) => `stable-${requested}`,
+    );
+
+    const result = await new ReviewCollector(gateway).collect({ projectPath: "/tmp/repo", cwd: "/tmp/repo", sources: sources() });
+
+    expect(result.outcomes.map((outcome) => outcome.kind)).toEqual(["collected", "collected"]);
+    expect(gateway.prompts.map((prompt) => prompt.name)).toEqual([
+      "stable-reviewer-a",
+      "stable-reviewer-b",
+      "stable-reviewer-a",
+      "stable-reviewer-b",
+    ]);
+  });
+
+  it("prefers isolated controlled artifact files over corrupted terminal output", async () => {
+    const artifactDir = await mkdtemp(join(tmpdir(), "herdr-collector-output-"));
+    tmpRoots.push(artifactDir);
+    const paths = new Map<string, string>();
+    const contracts: string[] = [];
+    const paneCwds: string[] = [];
+    let paneNumber = 0;
+    const fileGateway: ReviewAgentGateway = {
+      async splitPane(input: { cwd: string; env?: Record<string, string> }) {
+        paneCwds.push(input.cwd);
+        const paneId = `p${++paneNumber}`;
+        const outputPath = input.env?.HERDR_CONSENSUS_OUTPUT;
+        if (outputPath === undefined) throw new Error("missing controlled output path");
+        paths.set(paneId, outputPath);
+        return { paneId };
+      },
+      async startAgent(input) {
+        const outputPath = paths.get(input.paneId);
+        if (outputPath === undefined) throw new Error("unknown pane");
+        paths.set(input.name, outputPath);
+        return { name: input.name, status: "idle", paneId: input.paneId, workspaceId: "w", tabId: "t" };
+      },
+      async prompt(input) {
+        contracts.push(input.text);
+        const outputPath = paths.get(input.target);
+        if (outputPath === undefined) throw new Error("missing output path");
+        await writeFile(outputPath, VALID_JSON, "utf8");
+        return done("terminal redraw corrupted this output");
+      },
+    };
+
+    const result = await new ReviewCollector(fileGateway).collect({ projectPath: "/tmp/repo", cwd: "/tmp/repo", sources: sources(), artifactDir });
+
+    expect(result.outcomes.map((outcome) => outcome.kind)).toEqual(["collected", "collected"]);
+    expect(result.artifacts.a?.content).toBe(VALID_JSON);
+    expect(new Set(contracts).size).toBe(1);
+    expect(new Set([...paths.values()]).size).toBe(2);
+    expect(paneCwds.every((cwd) => cwd.startsWith(artifactDir) && cwd !== "/tmp/repo")).toBe(true);
+  });
+
   it("repairs invalid JSON exactly once and succeeds", async () => {
     const gateway = new FakeGateway((_name, call) =>
       call === 0 ? done(INVALID_OUTPUT) : done(`${DEFAULT_MARKERS.start}\n${VALID_JSON}\n${DEFAULT_MARKERS.end}\n`),
@@ -130,5 +200,26 @@ describe("ReviewCollector", () => {
 
     expect(result.outcomes.find((o) => o.slot === "a")?.kind).toBe("exited");
     expect(result.artifacts.a).toBeNull();
+  });
+
+  it("retries one stalled prompt only when no submission trace exists", async () => {
+    const gateway = new FakeGateway((_name, call) =>
+      call === 0 ? stalled("agent welcome screen") : done(`${DEFAULT_MARKERS.start}\n${VALID_JSON}\n${DEFAULT_MARKERS.end}`),
+    );
+
+    const result = await new ReviewCollector(gateway).collect({ projectPath: "/tmp/repo", cwd: "/tmp/repo", sources: sources() });
+
+    expect(result.outcomes.map((outcome) => outcome.kind)).toEqual(["collected", "collected"]);
+    expect(result.outcomes.map((outcome) => outcome.repairs)).toEqual([0, 0]);
+    expect(gateway.prompts).toHaveLength(4);
+  });
+
+  it("does not resend a stalled prompt when its marker is already visible", async () => {
+    const gateway = new FakeGateway(() => stalled(`echoed ${DEFAULT_MARKERS.start}`));
+
+    const result = await new ReviewCollector(gateway).collect({ projectPath: "/tmp/repo", cwd: "/tmp/repo", sources: sources() });
+
+    expect(result.outcomes.map((outcome) => outcome.kind)).toEqual(["stalled", "stalled"]);
+    expect(gateway.prompts).toHaveLength(2);
   });
 });

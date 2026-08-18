@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { main, parseArgv, PLUGIN_VERSION, type CliDeps } from "../../src/cli.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { main, parseArgv, PLUGIN_VERSION, resolveMainModule, type CliDeps } from "../../src/cli.js";
 import type { SpawnResult } from "../../src/spawn.js";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const tempRoots: string[] = [];
+afterEach(async () => { await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 function ok(stdout: string): SpawnResult {
   return { ok: true, code: 0, stdout, stderr: "" };
@@ -56,6 +63,18 @@ describe("parseArgv", () => {
   });
 });
 
+describe("CLI entry resolution", () => {
+  it("recognizes a symlinked npm bin entry as the main module", async () => {
+    const root = await mkdtemp(join(tmpdir(), "herdr-cli-entry-"));
+    tempRoots.push(root);
+    const target = join(root, "cli.js");
+    const bin = join(root, "herdr-consensus");
+    await writeFile(target, "", "utf8");
+    await symlink(target, bin);
+    expect(resolveMainModule(pathToFileURL(target).href, bin)).toBe(true);
+  });
+});
+
 describe("main", () => {
   it("prints the version and exits 0", async () => {
     const { deps, out } = makeDeps();
@@ -86,11 +105,11 @@ describe("main", () => {
     expect(parsed.ok).toBe(true);
   });
 
-  it("reports not-implemented commands to stderr and exits 2", async () => {
+  it("requires arguments for implemented workflow commands", async () => {
     const { deps, err } = makeDeps();
-    const code = await main(["validate"], deps);
+    const code = await main(["report"], deps);
     expect(code).toBe(2);
-    expect(err()).toContain("not implemented");
+    expect(err()).toContain("requires a run id");
   });
 
   it("rejects unknown commands with exit 2", async () => {

@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { RawReportArtifact } from "../reports/artifact.js";
-import { DEFAULT_MARKERS } from "../reports/contract.js";
-import { extractReportJson, parseReviewReport } from "../reports/extract.js";
+import { parseReportContent } from "../reports/content.js";
 import { normalizeRepoPath } from "./path.js";
 import { mapSeverity } from "./severity.js";
 import type { NormalizedFinding, SourceLocation } from "./types.js";
@@ -49,9 +48,7 @@ export function normalizeReport(
   artifact: RawReportArtifact,
   options: { repoRoot: string; sourceId: string },
 ): NormalizedFinding[] {
-  const json = extractReportJson(artifact.content, DEFAULT_MARKERS);
-  if (json === null) return [];
-  const parsed = parseReviewReport(json);
+  const parsed = parseReportContent(artifact.content);
   if (!parsed.ok) return [];
 
   const out: NormalizedFinding[] = [];

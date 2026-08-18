@@ -1,9 +1,11 @@
-import { mkdir, open, readFile, readdir, rename } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import type { Dirent } from "node:fs";
-import { dirname, basename, join } from "node:path";
+import { join } from "node:path";
 import { projectHash, runJsonPath as buildRunJsonPath } from "./paths.js";
+import { readJsonFile, writeJsonAtomic } from "./json.js";
 import {
   CURRENT_SCHEMA_VERSION,
+  RUN_STAGES,
   decodeRunRecord,
   stageIndex,
   type AuditEvent,
@@ -18,43 +20,6 @@ export interface CreateRunInput {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
-}
-
-async function readJsonFile(filePath: string): Promise<unknown | null> {
-  let text: string;
-  try {
-    text = await readFile(filePath, "utf8");
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return null;
-    throw error;
-  }
-  return JSON.parse(text) as unknown;
-}
-
-/** Writes JSON to a temp file, fsyncs, then atomically renames over the target. */
-async function writeJsonAtomic(filePath: string, data: unknown): Promise<void> {
-  const dir = dirname(filePath);
-  await mkdir(dir, { recursive: true });
-  const tmpPath = join(dir, `.${basename(filePath)}.tmp`);
-  const content = `${JSON.stringify(data, null, 2)}\n`;
-
-  const handle = await open(tmpPath, "w");
-  try {
-    await handle.writeFile(content, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await rename(tmpPath, filePath);
-
-  try {
-    const dirHandle = await open(dir, "r");
-    await dirHandle.sync();
-    await dirHandle.close();
-  } catch {
-    // Directory fsync is not supported on every filesystem; the rename above
-    // still guarantees readers see either the old or the new file, never a mix.
-  }
 }
 
 export class RunStore {
@@ -107,6 +72,10 @@ export class RunStore {
     if (targetIndex === currentIndex) return run;
     if (targetIndex < currentIndex) {
       throw new Error(`cannot move backwards from ${run.stage} to ${to}`);
+    }
+    if (targetIndex > currentIndex + 1) {
+      const next = RUN_STAGES[currentIndex + 1];
+      throw new Error(`cannot skip from ${run.stage} to ${to}; next stage is ${next ?? "unknown"}`);
     }
 
     const now = new Date().toISOString();

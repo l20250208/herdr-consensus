@@ -18,14 +18,16 @@ function loadScenario() {
 
 const scenario = loadScenario();
 
-function agentJson(status = "idle", name = "claude") {
-  return {
-    agent: name,
+function agentJson(status = "idle", kind = "claude", stableName) {
+  const agent = {
+    agent: kind,
     agent_status: status,
     pane_id: "w9:p1",
     workspace_id: "w9",
     tab_id: "w9:t1",
   };
+  if (stableName !== undefined) agent.name = stableName;
+  return agent;
 }
 
 function envelope(result) {
@@ -50,11 +52,15 @@ function handleAgent() {
   switch (process.argv[3]) {
     case "start": {
       if (scenario.start === "fail") writeErr("agent_start_failed", "agent failed to start");
-      writeOut(envelope({ agent: agentJson("idle", scenario.agentName ?? "claude") }));
+      writeOut(envelope({ agent: agentJson("idle", scenario.agentKind ?? "claude", scenario.stableName ?? "reviewer") }));
       break;
     }
     case "prompt": {
       if (scenario.prompt === "timeout") writeErr("timeout", "timed out");
+      if (scenario.prompt === "stderr_stalled") {
+        process.stderr.write(`${errorEnvelope("agent_prompt_stalled", "prompt stalled on stderr")}\n`);
+        process.exit(1);
+      }
       if (scenario.prompt === "stalled") writeErr("agent_prompt_stalled", "prompt stalled");
       if (scenario.prompt === "exit") writeErr("agent_not_found", "agent not found");
       if (scenario.prompt === "blocked") {
@@ -100,12 +106,23 @@ function handlePane() {
   }
 }
 
+function handleTab() {
+  if (process.argv[3] === "create") {
+    writeOut(envelope({ root_pane: { pane_id: "w9:p9", tab_id: "w9:t9", workspace_id: "w9" } }));
+  } else {
+    writeErr("unknown_command", `unknown tab subcommand ${process.argv[3]}`);
+  }
+}
+
 switch (process.argv[2]) {
   case "agent":
     handleAgent();
     break;
   case "pane":
     handlePane();
+    break;
+  case "tab":
+    handleTab();
     break;
   default:
     writeErr("unknown_command", `unknown command ${process.argv[2]}`);

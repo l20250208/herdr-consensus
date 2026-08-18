@@ -1,8 +1,8 @@
 # Herdr Consensus 设计与实施文档
 
-> 文档状态：已批准，实现中  
-> 当前阶段：阶段 5 — 标准化与共识引擎（已完成）  
-> 下一阶段：阶段 6 — P2 验证系统  
+> 文档状态：已批准，首发候选；全部发布门槛验证通过（含第三轮审查与独立维护者签核）
+> 当前阶段：阶段 12 — 全部发布门槛已验证通过，等待维护者的 commit / 发布决策
+> 下一阶段：由维护者决定是否提交脏 `main` 工作区并发布（AI 不自动 commit/merge/push）
 > 最后更新：2026-08-18
 
 ## 1. 项目摘要
@@ -164,13 +164,15 @@ Validation     Third-AI Arbiter
 
 - 通过官方 `herdr` CLI 调用 Agent 能力，不解析私有 socket 协议。
 - 使用 `HERDR_PLUGIN_CONTEXT_JSON`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID` 锁定调用上下文。
-- 使用 `herdr pane split --current --cwd ... --no-focus` 创建 pane。
+- 使用 `herdr pane split --current --direction right --cwd ... --no-focus` 创建 pane（阶段 12 烟雾测试确认 Herdr 0.8.0 要求显式 `--direction`）。
 - 使用 `herdr agent start <name> --kind <kind> --pane <id>` 启动用户选择的 Agent。
 - 使用 `herdr agent prompt ... --wait` 提交任务并等待稳定状态。
 - 使用 `herdr agent get/read` 获取状态和输出。
 - 使用 `herdr agent list`（返回 JSON）发现当前会话中已识别的 Agent；阶段 1 的 `doctor` 用它报告可用 Agent。
 - 所有公开 ID 视为不透明字符串；不从 ID 格式推断状态。
 - Agent 启动失败、阻塞或退出时保存现场，不自动重启超过一次。
+- 新建审查使用由 `run_id` 派生且满足 Herdr 命名规则（小写字母开头，≤32 字符）的唯一 Agent 名称，避免同一 Herdr workspace 内重复运行时与旧 Agent 名冲突。
+- Herdr 0.8.0 在部分非零退出场景会把 JSON error envelope 写到 stderr；适配器必须同时解析 stdout/stderr，不能把可分类错误降级为 protocol failed。
 
 #### Report Collector
 
@@ -406,7 +408,7 @@ $XDG_STATE_HOME/herdr-consensus/
       final-report.json
 ```
 
-macOS 未设置 `XDG_STATE_HOME` 时使用 `~/Library/Application Support/herdr-consensus/`；Linux 回退到 `~/.local/state/herdr-consensus/`。
+macOS 未设置 `XDG_STATE_HOME` 时使用 `~/Library/Application Support/herdr-consensus/`。实现中还保留了非 Darwin 平台回退到 `~/.local/state/herdr-consensus/` 的分支，但 v1 收窄为 macOS（见 §12.3），该分支不做支持声明、也未验证。
 
 ### 7.2 原子性和恢复
 
@@ -437,8 +439,8 @@ herdr-consensus validate <run-id>
 herdr-consensus arbitrate <run-id> --agent <kind>
 herdr-consensus decide <run-id>
 herdr-consensus lock <run-id>
-herdr-consensus apply <run-id> --agent <kind>
-herdr-consensus report <run-id> --format md|json
+herdr-consensus apply <run-id> --agent <kind> --approve-regression
+herdr-consensus report <run-id> [--json]
 ```
 
 所有命令支持 `--json` 返回机器可读结果。会修改代码或执行验证的命令不提供隐式 `--yes` 默认值。
@@ -561,7 +563,7 @@ herdr-consensus/
 ### 11.4 发布门槛
 
 - `pnpm lint`、`pnpm typecheck`、`pnpm test`、`pnpm build` 全部通过。
-- macOS 和 Linux 至少各完成一次无模型的 fixture 集成测试。
+- macOS 至少完成一次无模型的 fixture 集成测试（v1 平台范围收窄为 macOS，Linux 不在验收项内）。
 - 至少完成 Codex + Claude、Codex + Pi 两种真实 Agent 组合的只读烟雾测试；若环境不可用，发布说明必须明确未验证组合。
 - README 安装、卸载和恢复流程由一个未参与开发的人照做成功。
 - 插件预览中不包含不必要的网络下载或高权限命令。
@@ -574,17 +576,17 @@ herdr-consensus/
 | --- | --- | --- | --- |
 | 0. 文档和协作规则 | 已完成 | DESIGN、CHANGELOG、AGENTS、CLAUDE | 四份文档存在；两份规则文档内容完全一致 |
 | 1. 工程骨架和 doctor | 已完成 | package、TS 配置、manifest、CLI、环境检查 | `doctor` 能报告 Herdr/Node/Git/Agent；测试通过 |
-| 2. 状态存储和运行状态机 | 已完成 | 原子 JSON store、run schema、审计事件、resume | 崩溃 fixture 可恢复；重复执行不破坏状态 |
+| 2. 状态存储和运行状态机 | 已完成 | 原子 JSON store、run schema、审计事件、resume | 相邻阶段守卫、原子写入与按产物安全恢复均有测试 |
 | 3. Herdr Agent Adapter | 已完成 | pane/agent start、prompt、wait、read、错误分类 | fake Herdr 集成测试覆盖完成/阻塞/退出/超时 |
 | 4. 双 Agent 独立审查 | 已完成 | 统一 prompt、并行运行、原始报告收集、导入模式 | 两 Agent 互不可见；无效 JSON 有一次修复机会 |
 | 5. 标准化与共识引擎 | 已完成 | schema、normalizer、matcher、dispute detector | fixture 交集/分歧稳定；性质测试通过 |
-| 6. P2 验证系统 | 未开始 | 命令计划、批准界面、安全执行、证据记录 | 危险命令被阻止；通过/失败/不确定正确归类 |
-| 7. 第三方 AI 建议 | 未开始 | 推荐/替换 Agent、只读仲裁 prompt、建议解析 | 不改代码；来源、模型、置信度和证据完整记录 |
-| 8. 用户逐项裁决向导 | 未开始 | 交互 UI、决定持久化、返回补验证 | 可恢复；每项决定绑定证据快照 |
-| 9. 锁定修复清单 | 未开始 | fix-plan JSON/MD、版本和 SHA-256 | 修改决定会生成新版本；旧版本不可覆盖 |
-| 10. worktree 统一修复 | 未开始 | Git 安全检查、隔离 worktree、写入 Agent、定向测试 | 主工作目录不变；禁止越过锁定清单 |
-| 11. 回归与统一报告 | 未开始 | 全量测试、diff 摘要、Markdown/JSON 报告 | 报告能追溯每个问题到证据、决定和修改 |
-| 12. 文档、真实烟雾测试和首发 | 未开始 | README、许可证、安装包、兼容性矩阵 | 发布门槛全部满足；无已知 P0/P1 |
+| 6. P2 验证系统 | 已完成 | 命令计划、批准界面、安全执行、证据记录 | 非零结论、共识回写、唯一/追加记录已修；第三轮复核通过 |
+| 7. 第三方 AI 建议 | 已完成 | 推荐/替换 Agent、只读仲裁 prompt、建议解析 | cwd、最新 marker、itemId、失败重试已修；第三轮复核通过 |
+| 8. 用户逐项裁决向导 | 已完成 | 交互 UI、决定持久化、返回补验证 | arbitrating/deciding 的 validate_more 与多项决定闭环已修；第三轮复核通过 |
+| 9. 锁定修复清单 | 已完成 | fix-plan JSON/MD、版本和 SHA-256 | 完整/过期决定、计划防篡改、archive/latest 回滚已修；第三轮复核通过 |
+| 10. worktree 统一修复 | 已完成 | Git 安全检查、隔离 worktree、写入 Agent、定向测试 | immutable base、全状态路径、HEAD、schema 和计划校验已修；第三轮复核通过 |
+| 11. 回归与统一报告 | 已完成 | 全量测试、diff 摘要、Markdown/JSON 报告 | 已批准持久化回归、内容快照和 report 复核已修；第三轮复核通过 |
+| 12. 文档、真实烟雾测试和首发 | 已完成 | README、许可证、安装包、兼容性矩阵、首发闭环修复 | 真实 smoke、第三轮审查、最新发布包复验和独立维护者 macOS 安装/恢复/卸载签核均已通过 |
 
 ### 12.1 阶段执行规则
 
@@ -599,6 +601,137 @@ herdr-consensus/
 7. 更新本表状态和必要的设计说明。
 8. 在 `CHANGELOG.md` 追加修改文件、修改原因、验证结果和下一位维护者注意事项。
 9. 形成一个范围清晰的 Git commit；不要把多个阶段揉进同一提交。
+
+### 12.2 首发闭环修复设计（2026-08-18）
+
+#### 调整原因与实际证据
+
+阶段 5 已完成标准化器与共识引擎的模块级实现，但后续阶段默认它们已经接入运行流程。首发审查发现以下接口断点：
+
+- `start` / `import` 只保存 `raw/` 并停在 `reviewing`，没有生成 `normalized/findings.json` 或 `consensus.json`；`validate` 却把 `consensus.json` 作为必需输入。
+- `herdr-plugin.toml` 的四个 action 不传参数，而对应 CLI 命令要求 Agent kind 或 run ID，导致从 Herdr 直接触发时立即失败。
+- `resume` 只显示当前阶段，未根据持久化产物继续运行；`decide` 只有参数式写入，没有设计要求的逐项交互向导。
+- 状态机允许跳过中间阶段，`lock` / `report` 对缺失输入使用空数组或 `null`，可能把不完整运行推进为 `locked` / `reported`。
+- 2026-08-18 的真实 Codex + Claude 烟雾测试进一步发现 Herdr 0.8.0 返回的 Agent 对象同时包含 kind 字段 `agent` 和稳定目标字段 `name`；适配层误把 `agent` 当作提示目标，导致 `herdr agent prompt claude` 无法命中刚启动的 Agent。相邻 pane split 后也可能短暂未进入可用 shell，首次 `agent start` 返回 `agent target pane ... is not an available shell`。
+- 修正身份与启动重试后，两名 Agent 均实际完成审查，但默认 `agent read` 的 `recent` 来源按窄 pane 显示宽度插入换行，JSON 标记和字符串被拆开；固定读取 200 行还会截断较长报告。Herdr 0.8.0 已提供 `--source recent-unwrapped`，应使用未换行的逻辑输出并把读取窗口提高到覆盖 2 MiB 报告限制的合理上限。
+- 独立全宽 tab 恢复了完整输出后，终端快照同时包含用户 prompt 中的空 marker 模板和 Agent 回答中的 marker。原提取器总取第一对 marker，因此会解析 prompt 中的空字符串并误报 `Unexpected end of JSON input`；必须选择最后一对完整 marker，使终端回显不会遮蔽最新 Agent 报告。
+- 全宽 148 列下，Codex/Claude TUI 仍会在超长 JSON 字符串的词边界插入物理换行和显示缩进，标准 `JSON.parse` 因字符串内原始控制字符失败。原始 artifact 必须保持不变；解析前只在 JSON 字符串状态内部把未转义 CR/LF 及紧随的显示缩进规范化为单个空格，字符串外换行不变。同时 prompt 要求单个字符串不超过 100 字符，降低标识符或路径在终端边界被拆分的风险。
+- Claude 的真实终端快照还出现输入框内容插入 JSON 对象中间的 TUI 重绘污染；`recent`、`recent-unwrapped`、`visible`、`detection` 都只提供终端渲染而非模型消息，无法从污染文本可靠恢复。结构化报告必须增加插件自有文件通道，终端输出只作为兼容回退和可观察日志。
+
+这些问题属于既有阶段之间的集成缺口，不改变 v1 产品目标，但会改变 CLI 编排、阶段前置条件和 Herdr action 的交互行为，因此必须先更新本文档再修改代码。
+
+因此阶段 2、7–11 的模块代码虽已存在，但对应验收门槛尚未全部满足，本表将这些阶段重新标为 `进行中`。本轮仍作为阶段 12 的首发闭环修复统一收口，不回写或伪造历史完成记录。
+
+#### 方案选择
+
+采用单一受测的工作流服务串联现有模块，不在 `src/cli.ts` 继续堆叠业务逻辑：
+
+1. 新增 review processing 服务，读取两个原始 artifact，解析并标准化为分槽 findings，依次持久化 `normalized/findings.json` 与 `consensus.json`，并推进 `normalized`、`consensus` 阶段。
+2. `start` 在两名 Agent 都成功返回有效报告后自动调用该服务；`import` 在两个输入都可解析为 v1 报告后自动调用。无法解析的导入内容保留原文并明确报错，不以“零发现”冒充成功。
+3. 导入格式按保守顺序识别：审查标记包裹的 JSON、完整 JSON 对象、Markdown 的 `json` fenced code block。任意纯文本仍可被安全保存，但必须停在 `reviewing` 并要求用户换成受支持的结构化报告。
+4. `resume [run-id]` 根据当前阶段和已有产物执行最近的安全幂等步骤：`reviewing` 且原始报告完整时重试 processing；`normalized` 时重建共识；其他阶段显示下一条需要用户批准或补参的命令。无 run ID 且为交互终端时选择未完成运行，非交互终端继续要求显式 run ID。
+5. Herdr actions 保持无参数 manifest，通过交互模式补齐参数：`start` 询问两个不同 Agent kind；`resume` 选择未完成 run；`decide` 选择 run 后逐项选择固定决定；`report` 选择最近一个满足报告前置条件的 run。显式 CLI 参数继续可用于脚本和测试。
+6. 引入集中式阶段/产物守卫。`validate`、`arbitrate`、`decide`、`lock`、`apply`、`report` 在必需阶段或文件缺失时失败关闭，不能用空默认值跨过流程。状态转换只允许同阶段幂等或移动到紧邻的下一阶段；确需一次命令完成两步时必须逐次记录审计事件。
+7. 把最终报告 JSON Schema、CLI 闭环 fixture 和 Herdr action 参数/交互测试纳入阶段 12；发布包只包含运行所需 bundle、manifest、README、LICENSE 和公开 schema/prompt，不包含 `src/` 与 `tests/`。
+8. Herdr Agent 身份解析优先使用返回对象的稳定 `name`，只在旧 fixture/旧版本没有该字段时回退到 `agent`；pane 刚分割后的 `agent start` 仅对明确的 “not an available shell” 瞬态错误做有限次数、短间隔重试，其他启动错误仍立即失败，避免重复启动未知 Agent。
+9. `agent read` 固定请求 `--source recent-unwrapped`，提示完成后的报告读取窗口提高到 4000 行；仍由 2 MiB 内容上限作最终内存与解析边界。收集器后续命令使用 `startAgent` 实际返回的稳定名称，兼容 Herdr 对请求名称的规范化。
+10. 真实布局验证显示同一 tab 连续向右 split 会把后续 pane 压缩到 1–3 列，TUI 在写入 scrollback 时已破坏结构化输出，事后 unwrapped/zoom 无法可靠恢复。因此每个长报告 Agent 改为使用 `herdr tab create --no-focus --cwd ...` 的独立全宽 root pane；保留 tab 和终端作为可观察审计现场，不自动关闭。内部 gateway 的历史方法名可暂时兼容，但行为契约改为“创建隔离 Agent pane”，不再承诺来自当前 tab 的 split。
+11. marker 提取从“第一对”改为“最后一个 start marker 及其后第一个 end marker”；若最后一对不完整则失败关闭，不回退到 prompt 模板或更早的旧报告。这也保证一次 repair 后只采纳最新回答。
+12. `parseReviewReport` 在 `JSON.parse` 前执行有限的终端换行规范化：仅跟踪 JSON 引号/反斜杠状态，仅修改字符串内部的原始 CR/LF 与后续水平缩进，其他字符逐字保留。若仍无法解析则照常失败并触发至多一次 repair；不得做通用“删换行”或补括号等猜测性修复。
+13. 每个 Agent 的独立 tab 注入唯一的 `HERDR_CONSENSUS_OUTPUT` 环境变量，值必须位于当前 run 的插件状态目录。两个 Agent 收到完全相同的 contract：允许读取项目和运行只读检查命令，禁止修改项目、执行项目代码/脚本/测试；唯一允许的写入是把纯 JSON 报告写到该环境变量指定的插件 artifact 文件，同时仍在终端输出 marker 版本供人观察。收集器优先读取并校验该文件，缺失时才回退终端；repair 前清除本 run 内的无效候选并要求覆盖同一路径。主项目仍保持只读。
+14. Codex 对 cwd 之外的 artifact 写入会进入人工批准并返回 `blocked`。因此每个 Agent tab 的 cwd 改为当前 run 下各自的 `agent-output/<slot>/`，报告路径为该 cwd 内的 `report.json`；contract 继续用绝对 `Project` 路径明确审查目标，并强调不要把空的 artifact cwd 当作被审查项目。这样 Agent 的唯一写入位于自身工作根内，主项目不进入可写 workspace。
+15. 独立 cwd 后的真实测试显示 Claude `agent start` 可报告 ready，但紧接着的首次 prompt 可能未出现在终端，5 秒后返回 stalled。收集器只在“artifact 不存在且 stalled 输出不含合同 start marker”时重发同一合同一次；这代表有证据表明首次提交未落地。若已有 marker、文件或第二次仍 stalled，则保留现场并失败，不进行盲目重复提示。
+16. 最终审查整改把 apply 的安全基线固定为创建 worktree 后立即记录的 `baseCommit`。修改范围和最终 diff 都比较 `baseCommit..worktree` 并合并未跟踪文件；若 Agent 移动 `HEAD`，apply 失败关闭。仲裁 Agent 的 cwd 固定在 run 状态目录的 `arbitration/agent-work/`，且只接受最新一对 marker 中、`itemId` 与当前请求一致的建议；缺失或错项建议不能推进阶段。
+17. `validate_more` 是可恢复循环而非终态：运行保持在 `arbitrating`，允许再次 `validate`、`arbitrate` 和覆盖该项决定。验证命令仅在退出 0 时支持“问题未复现/已排除”；非零、超时或运行器失败统一记为 `inconclusive`，并把结论回写到对应 consensus item。每轮验证使用唯一 ID 并追加到 records，不能覆盖上一轮日志或证据。`lock` 必须验证每个非自动批准项都有非 `validate_more` 的决定，且证据快照仍与当前 item、finding、validation 和 arbitration 一致。
+18. apply 新增显式 `--approve-regression` 批准门槛：在隔离 worktree 中运行自动探测到的项目级回归命令，将结果原子保存为 `logs/regression.json`；没有可探测命令、未批准、运行失败或非零退出都不能进入 `applying`。`report` 只读取这份已批准、成功且持久化的证据，不在导出时再次执行项目代码；已 `reported` 的 run 只打开既有报告，不重新生成。
+19. 所有决策和工作流 JSON 在缺失时可按阶段语义使用明确默认值，但损坏或结构非法时必须返回非零，不能降级为空数据。CLI 顶层捕获这类 artifact 错误并输出可诊断消息。fix-plan 的 JSON/Markdown 版本先双文件预检、写入临时文件，再发布；任一步失败都清理本次临时/部分产物，使同一版本可以安全重试。
+20. 发布 tarball 使用预构建 `dist/cli.js`，manifest 不声明依赖源码、lockfile 或 TypeScript 配置的安装期 build；源码打包通过 npm `prepack` 生成 bundle。安装验证必须从实际 tarball 安装 production dependencies 后运行 CLI，而不是只在源码仓库内执行。
+21. npm 的 `node_modules/.bin/herdr-consensus` 是指向真实 bundle 的符号链接，macOS 的 `/tmp` 也可能解析为 `/private/tmp`。CLI 入口判定必须比较两侧的 realpath，不能直接比较未规范化的 `import.meta.url` 与 `process.argv[1]`；发布验收必须通过安装后的 `.bin/herdr-consensus --version` 和 `doctor --json`。
+22. 已进入 `deciding` 的 run 仍可能把某项改回 `validate_more`。状态机不倒退，但 `validate`、`arbitrate` 和 `decide` 在 `deciding` 阶段继续可用；`resume` 在存在 `validate_more` 时推荐重新验证，`lock` 继续失败关闭。这样只有所有非自动项重新形成终态决定后才能锁定。
+23. 工作流 artifact 的“JSON 可解析”不等于有效。consensus、normalized findings、validation records、arbitration advice/metadata、fix-plan、path-policy、targeted checks 和 regression 都必须经过运行时 schema 解码；文件缺失仅在该阶段明确允许时使用默认值，已存在但结构非法一律返回非零。
+24. apply 在创建 worktree 前必须验证根 `fix-plan.json`：`runId` 与当前 run 一致，版本和 SHA-256 与最新 `locked` 审计事件一致，按规范化内容重算的哈希一致，并与 `fix-plans/vN.json` 完全相同。任一不一致都视为锁定后篡改。
+25. 回归证据增加 worktree 内容快照 SHA-256。快照以相对 base commit 的 tracked/untracked 变更路径为集合，按路径排序后散列每项的路径、文件类型、mode、删除标记或原始内容；apply 在成功回归后持久化，report 在生成前重算并要求完全相同，从而拒绝允许路径内的回归后修改，同时避免依赖可能被输出截断的大型 binary diff。
+26. fix-plan 发布把 archive JSON/Markdown 和 latest JSON/Markdown 视为一次可回滚操作：写入前保存原 latest，任一步失败时恢复原 latest、移除本次 archive 和临时文件，使同一版本能够安全重试；成功后四份文件保持同一计划版本。
+
+#### 稳定接口与数据流
+
+新增内部接口（命名可在不改变行为契约的前提下微调）：
+
+```ts
+interface ProcessReviewInput {
+  run: RunRecord;
+  runDir: string;
+  artifacts: Record<"a" | "b", RawReportArtifact>;
+}
+
+interface ProcessReviewResult {
+  findings: NormalizedFinding[];
+  items: ConsensusItem[];
+}
+
+processReview(input: ProcessReviewInput, store: RunStore): Promise<ProcessReviewResult>;
+resumeRun(runId: string, deps: CliDeps): Promise<ResumeResult>;
+```
+
+规范化 findings 继续使用现有稳定类型；槽位 A/B 分别使用 `agent_a` / `agent_b` 作为 `sourceId`，即使 artifact 来自导入，也不能让两槽因共同的 `import` source ID 失去独立性。`consensus.json` 的规范形式固定为 `{ "items": ConsensusItem[] }`。
+
+所有新增 JSON 产物通过共享的原子 JSON 写入函数保存。processing 任一步失败时不得推进阶段；已有 raw artifact 和错误说明必须保留以便恢复。
+
+#### 错误处理与安全边界
+
+- 不从自由文本补造 finding；不支持的导入格式返回可操作的格式说明。
+- Agent 输出与导入报告执行 2 MiB 单份上限并清理终端控制字符；截断内容不得继续自动标准化。
+- 交互模式只负责收集用户选择，不隐式批准验证命令、写入 Agent、commit、merge、push 或部署。
+- `resume` 不自动重启丢失的真实 Agent；缺少可恢复 artifact 时显示现场与重新启动建议。
+- 已锁定的 fix-plan 版本写入版本化归档，根路径文件只作为 latest 指针内容；旧版本不能覆盖。
+- Agent 后续 `prompt` / `read` / `wait` 必须使用 Herdr 返回的稳定 `name`，不得用 agent kind 代替目标；pane shell 就绪重试最多 3 次，并受原启动超时总预算约束。
+- 终端报告只从 `recent-unwrapped` 读取；不得依赖 pane 显示宽度，也不得通过猜测性去换行修补已经破坏的 JSON。
+- 长报告 Agent 使用独立、非聚焦 tab，避免修改用户当前 tab 布局和窄 pane 数据损坏；插件仍不自动关闭用户可见终端。
+- Agent 文件输出路径由插件生成并通过环境变量注入，不接受模型或用户提供的任意路径；只允许写当前 run 的 `agent-output/`，读取后仍执行 2 MiB、结构和 schema 校验。该例外不授权修改被审查项目。
+- Agent 进程 cwd 位于其独立 artifact 子目录，被审查项目仅以绝对路径提供并保持 cwd 之外；不得为方便写报告而把主项目重新设为 Agent 可写根。
+- stalled 重试必须以“无 artifact、无 prompt marker”双重证据为前提，最多一次；它属于传输重试，不计为 JSON repair，也不放宽总流程失败关闭语义。
+
+#### 验收标准
+
+- fixture 中 `start` 和结构化 `import` 一次命令生成 raw、normalized、consensus 三类产物，状态最终为 `consensus`。
+- 无结构纯文本导入保留 raw，返回非零，状态保持 `reviewing`，错误信息说明三种受支持格式。
+- `resume` 能从完整 raw 的 `reviewing` 状态恢复到 `consensus`，重复执行不改变结果或制造重复审计事件。
+- 四个 manifest action 在交互测试中都能获取缺失参数；在非交互环境中返回明确用法而不是挂起。
+- 每个后续命令都有阶段与产物前置条件测试，不能从 `created` / `reviewing` 直接生成空 fix-plan 或 final report。
+- 逐项裁决向导显示相关 finding、验证与仲裁摘要，并为每项写入带证据快照的决定。
+- `pnpm lint`、`pnpm typecheck`、`pnpm test`、`pnpm build`、安装包 dry-run 全部通过；新增至少一条无模型完整 CLI fixture 测试。
+- 完成 Codex + Claude、Codex + Pi 真实只读烟雾测试；环境阻塞时保留准确命令、错误和未验证声明，不将阶段 12 标为完成。
+- 集成测试覆盖 Herdr 返回 `agent` 与 `name` 不同的对象，确保稳定名称透传；覆盖 pane 首次未就绪、随后启动成功以及非瞬态错误不重试。
+- 真实窄 pane 输出仍能通过 unwrapped source 保持标记与 JSON 完整；收集器测试验证后续 prompt 使用启动结果返回的稳定名称。
+- gateway 测试验证隔离 pane 来自 `tab create` 的 `root_pane`；真实烟雾必须在已经存在多个 pane 的 workspace 中仍得到完整 JSON。
+- marker 提取测试覆盖“终端回显空模板 + 最新有效回答”和“一次 repair 后存在多对 marker”，结果只采纳最后一份完整报告。
+- 报告解析测试覆盖字符串内终端硬换行可恢复、字符串外格式换行保持有效、转义引号/反斜杠不破坏状态，以及其他畸形 JSON 仍失败关闭。
+- 收集器测试覆盖两个隔离 pane 获得不同的受控输出路径但相同 contract；有效文件优先于受污染终端，文件缺失时兼容终端，超限/无效文件仍只 repair 一次。
+- 收集器测试验证每个 pane cwd 等于对应 artifact 文件父目录，contract 仍指向真实项目绝对路径。
+- 收集器测试覆盖无提交痕迹的首次 stalled 可重试一次，以及已有 marker 的 stalled 不重发。
+
+### 12.3 v1 平台范围调整：仅支持 macOS（2026-08-18）
+
+#### 原决定
+
+- `herdr-plugin.toml` 声明 `platforms = ["linux", "macos"]`，README/DESIGN 将 Linux 与 macOS 并列为受支持平台。
+- 发布门槛 §11.4 要求 macOS 与 Linux 各完成一次无模型 fixture 集成测试。
+
+#### 实际证据
+
+- 本会话全部自动化验证与真实 Herdr 只读烟雾测试均在 macOS 完成；环境中无 Linux 机器、WSL 或容器可用，无法执行 Linux fixture。
+- 实现是 Node.js + Git 的 POSIX 实现，`src/state/paths.ts` 的非 Darwin 状态目录回退（`~/.local/state/`）已存在但从未实测。
+
+#### 调整
+
+- v1 平台范围收窄为 macOS：`herdr-plugin.toml` 的 `platforms` 改为 `["macos"]`，撤销 Linux 支持声明。
+- 保留 `~/.local/state/herdr-consensus/` 的状态目录回退代码，但不再作为受支持/已验证平台承诺。
+- 发布门槛 §11.4 由“macOS 和 Linux 各至少一次无模型 fixture”改为“macOS 至少一次无模型 fixture”；Linux 移出 v1 验收项。
+
+#### 影响与后续
+
+- 若未来要支持 Linux，需补充 Linux 无模型 fixture 验证与真实烟雾测试，再恢复 `platforms` 声明。
+- 本调整不改变数据模型、CLI 接口、阶段顺序或安全边界。
 
 ## 13. 借鉴来源与使用边界
 

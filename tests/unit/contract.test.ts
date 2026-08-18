@@ -23,6 +23,18 @@ describe("buildReviewContract", () => {
     expect(contract.toLowerCase()).toMatch(/read-only|read only|do not modify/);
   });
 
+  it("limits string lengths to protect JSON from terminal hard wrapping", () => {
+    const contract = buildReviewContract({ projectPath: "/tmp/repo" });
+    expect(contract).toMatch(/string.*100 characters/i);
+  });
+
+  it("requires the controlled artifact file while keeping the project read-only", () => {
+    const contract = buildReviewContract({ projectPath: "/tmp/repo" });
+    expect(contract).toContain("HERDR_CONSENSUS_OUTPUT");
+    expect(contract).toMatch(/only allowed write/i);
+    expect(contract).toMatch(/artifact working directory.*not.*reviewed project/i);
+  });
+
   it("is deterministic for the same project", () => {
     expect(buildReviewContract({ projectPath: "/tmp/repo" })).toBe(
       buildReviewContract({ projectPath: "/tmp/repo" }),

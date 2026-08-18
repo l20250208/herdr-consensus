@@ -3,13 +3,7 @@ name = "herdr-consensus"
 version = "0.1.0"
 min_herdr_version = "0.8.0"
 description = "Turn two independent coding-agent reviews of the same project into one verifiable, adjudicable, traceable fix plan."
-platforms = ["linux", "macos"]
-
-[[build]]
-command = ["pnpm", "install", "--frozen-lockfile"]
-
-[[build]]
-command = ["pnpm", "run", "build"]
+platforms = ["macos"]
 
 [[actions]]
 id = "new-review"

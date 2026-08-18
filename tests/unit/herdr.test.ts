@@ -75,3 +75,73 @@ describe("HerdrAgentAdapter.prompt classification", () => {
     expect(result.kind).toBe("stalled");
   });
 });
+
+describe("HerdrAgentAdapter.startAgent", () => {
+  it("retries a newly split pane that has not reached a shell prompt", async () => {
+    let attempts = 0;
+    const run: Runner = async () => {
+      attempts++;
+      if (attempts === 1) {
+        return err("agent_start_failed", "agent target pane w7:pC is not an available shell", 1);
+      }
+      return json({
+        agent: {
+          agent: "codex",
+          name: "hc-run-a",
+          agent_status: "idle",
+          pane_id: "w7:pC",
+          workspace_id: "w7",
+          tab_id: "w7:t2",
+        },
+      });
+    };
+    const adapter = new HerdrAgentAdapter({ run, startRetryDelayMs: 0 });
+
+    await expect(adapter.startAgent({ name: "hc-run-a", kind: "codex", paneId: "w7:pC" })).resolves.toMatchObject({ name: "hc-run-a" });
+    expect(attempts).toBe(2);
+  });
+
+  it("does not retry non-transient start errors", async () => {
+    let attempts = 0;
+    const run: Runner = async () => {
+      attempts++;
+      return err("agent_start_failed", "agent executable is unavailable", 1);
+    };
+    const adapter = new HerdrAgentAdapter({ run, startRetryDelayMs: 0 });
+
+    await expect(adapter.startAgent({ name: "hc-run-a", kind: "codex", paneId: "w7:pC" })).rejects.toThrow("agent executable is unavailable");
+    expect(attempts).toBe(1);
+  });
+});
+
+describe("HerdrAgentAdapter.read", () => {
+  it("requests unwrapped recent terminal output", async () => {
+    const run: Runner = async (argv) => {
+      expect(argv).toContain("recent-unwrapped");
+      return { ok: true, code: 0, stdout: "report\n", stderr: "" };
+    };
+    const adapter = new HerdrAgentAdapter({ run });
+
+    await expect(adapter.read("hc-run-a", { lines: 4000 })).resolves.toBe("report\n");
+  });
+});
+
+describe("HerdrAgentAdapter.splitPane", () => {
+  it("creates an isolated non-focused tab and returns its root pane", async () => {
+    const run: Runner = async (argv) => {
+      expect(argv.slice(1, 3)).toEqual(["tab", "create"]);
+      expect(argv).toContain("--no-focus");
+      expect(argv).toContain("HERDR_CONSENSUS_OUTPUT=/tmp/report.json");
+      return json({
+        root_pane: {
+          pane_id: "w7:pH",
+          tab_id: "w7:t3",
+          workspace_id: "w7",
+        },
+      });
+    };
+    const adapter = new HerdrAgentAdapter({ run });
+
+    await expect(adapter.splitPane({ cwd: "/tmp/repo", env: { HERDR_CONSENSUS_OUTPUT: "/tmp/report.json" } })).resolves.toEqual({ paneId: "w7:pH" });
+  });
+});

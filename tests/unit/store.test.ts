@@ -62,6 +62,13 @@ describe("RunStore", () => {
     await expect(store.transition("run-1", "created")).rejects.toThrow(/backwards/);
   });
 
+  it("rejects skipping a lifecycle stage", async () => {
+    const store = new RunStore(await tempRoot());
+    await store.createRun({ runId: "run-1", projectPath: "/tmp/repo" });
+
+    await expect(store.transition("run-1", "consensus")).rejects.toThrow(/skip.*reviewing/i);
+  });
+
   it("recovers after a simulated crash (stale temp file)", async () => {
     const root = await tempRoot();
     const store = new RunStore(root);

@@ -1,3 +1,5 @@
+import { mkdir, readFile, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { AgentInfo, PromptInput, PromptOutcome, StartAgentInput } from "../herdr/types.js";
 import { makeArtifact, type RawReportArtifact, type ReportSourceId } from "./artifact.js";
 import {
@@ -7,6 +9,7 @@ import {
   type ContractMarkers,
 } from "./contract.js";
 import { buildRepairPrompt, extractReportJson, parseReviewReport } from "./extract.js";
+import { sanitizeReportContent } from "./content.js";
 
 export type Slot = "a" | "b";
 
@@ -17,7 +20,7 @@ export interface ReviewSource {
 }
 
 export interface ReviewAgentGateway {
-  splitPane(input: { cwd: string }): Promise<{ paneId: string }>;
+  splitPane(input: { cwd: string; env?: Record<string, string> }): Promise<{ paneId: string }>;
   startAgent(input: StartAgentInput): Promise<AgentInfo>;
   prompt(input: PromptInput): Promise<PromptOutcome>;
 }
@@ -50,6 +53,7 @@ interface CollectInput {
   cwd: string;
   sources: [ReviewSource, ReviewSource];
   markers?: ContractMarkers;
+  artifactDir?: string;
 }
 
 interface OneResult {
@@ -59,6 +63,35 @@ interface OneResult {
 
 function slotToSourceId(slot: Slot): ReportSourceId {
   return slot === "a" ? "agent_a" : "agent_b";
+}
+
+function parseOutput(content: string, markers: ContractMarkers, allowWholeJson: boolean): { ok: true } | { ok: false; error: string } {
+  const sanitized = sanitizeReportContent(content);
+  if (sanitized.rejected) return { ok: false, error: sanitized.reason ?? "report was rejected" };
+  const marked = extractReportJson(sanitized.content, markers);
+  const candidate = marked ?? (allowWholeJson ? sanitized.content.trim() : null);
+  if (candidate === null) return { ok: false, error: "no JSON found between markers" };
+  const parsed = parseReviewReport(candidate);
+  return parsed.ok ? { ok: true } : { ok: false, error: parsed.error };
+}
+
+async function readOutputFile(path: string | null): Promise<{ content: string; validation: ReturnType<typeof parseOutput> } | null> {
+  if (path === null) return null;
+  try {
+    const content = await readFile(path, "utf8");
+    return { content, validation: parseOutput(content, DEFAULT_MARKERS, true) };
+  } catch {
+    return null;
+  }
+}
+
+async function clearOutputFile(path: string | null): Promise<void> {
+  if (path === null) return;
+  try {
+    await unlink(path);
+  } catch {
+    // A missing per-run candidate is the normal pre-prompt state.
+  }
 }
 
 /**
@@ -71,6 +104,7 @@ export class ReviewCollector {
   async collect(input: CollectInput): Promise<CollectedReview> {
     const markers = input.markers ?? DEFAULT_MARKERS;
     const contract = buildReviewContract({ projectPath: input.projectPath, markers });
+    if (input.artifactDir !== undefined) await mkdir(input.artifactDir, { recursive: true });
     const [a, b] = await Promise.all([
       this.collectOne(input, input.sources[0], contract, markers),
       this.collectOne(input, input.sources[1], contract, markers),
@@ -90,10 +124,30 @@ export class ReviewCollector {
     markers: ContractMarkers,
   ): Promise<OneResult> {
     const sourceId = slotToSourceId(source.slot);
+    const outputPath = input.artifactDir === undefined ? null : join(input.artifactDir, source.slot, "report.json");
     try {
-      const { paneId } = await this.gateway.splitPane({ cwd: input.cwd });
-      await this.gateway.startAgent({ name: source.name, kind: source.kind, paneId });
-      const result = await this.gateway.prompt({ target: source.name, text: contract });
+      if (outputPath !== null) await mkdir(dirname(outputPath), { recursive: true });
+      await clearOutputFile(outputPath);
+      const paneInput: { cwd: string; env?: Record<string, string> } = {
+        cwd: outputPath === null ? input.cwd : dirname(outputPath),
+      };
+      if (outputPath !== null) paneInput.env = { HERDR_CONSENSUS_OUTPUT: outputPath };
+      const { paneId } = await this.gateway.splitPane(paneInput);
+      const started = await this.gateway.startAgent({ name: source.name, kind: source.kind, paneId });
+      let result = await this.gateway.prompt({ target: started.name, text: contract });
+
+      if (result.kind === "stalled") {
+        const stalledFile = await readOutputFile(outputPath);
+        if (stalledFile?.validation.ok === true) {
+          return {
+            artifact: makeArtifact({ sourceId, agentKind: source.kind, content: stalledFile.content }),
+            outcome: { slot: source.slot, kind: "collected", detail: null, repairs: 0 },
+          };
+        }
+        if (stalledFile === null && !result.output.includes(markers.start)) {
+          result = await this.gateway.prompt({ target: started.name, text: contract });
+        }
+      }
 
       if (result.kind === "blocked") {
         return {
@@ -111,13 +165,18 @@ export class ReviewCollector {
         return { artifact: null, outcome: { slot: source.slot, kind: "stalled", detail: result.message, repairs: 0 } };
       }
 
-      const json = extractReportJson(result.output, markers);
-      if (json === null) {
-        return await this.repairOnce(source, sourceId, markers, result.output, "no JSON found between markers");
+      const fileOutput = await readOutputFile(outputPath);
+      if (fileOutput?.validation.ok === true) {
+        return {
+          artifact: makeArtifact({ sourceId, agentKind: source.kind, content: fileOutput.content }),
+          outcome: { slot: source.slot, kind: "collected", detail: null, repairs: 0 },
+        };
       }
-      const parsed = parseReviewReport(json);
-      if (!parsed.ok) {
-        return await this.repairOnce(source, sourceId, markers, result.output, parsed.error);
+      const terminalValidation = parseOutput(result.output, markers, false);
+      if (!terminalValidation.ok) {
+        const originalOutput = fileOutput?.content ?? result.output;
+        const parseError = fileOutput !== null && !fileOutput.validation.ok ? fileOutput.validation.error : terminalValidation.error;
+        return await this.repairOnce(source, started.name, sourceId, markers, outputPath, originalOutput, parseError);
       }
       return {
         artifact: makeArtifact({ sourceId, agentKind: source.kind, content: result.output }),
@@ -138,15 +197,18 @@ export class ReviewCollector {
 
   private async repairOnce(
     source: ReviewSource,
+    target: string,
     sourceId: ReportSourceId,
     markers: ContractMarkers,
+    outputPath: string | null,
     originalOutput: string,
     parseError: string,
   ): Promise<OneResult> {
     const repairPrompt = buildRepairPrompt(parseError, markers);
     let repaired: PromptOutcome;
     try {
-      repaired = await this.gateway.prompt({ target: source.name, text: repairPrompt });
+      await clearOutputFile(outputPath);
+      repaired = await this.gateway.prompt({ target, text: repairPrompt });
     } catch (error) {
       return this.invalid(source, sourceId, originalOutput, parseError);
     }
@@ -154,10 +216,15 @@ export class ReviewCollector {
     if (repaired.kind !== "done") {
       return this.invalid(source, sourceId, originalOutput, parseError);
     }
-    const json = extractReportJson(repaired.output, markers);
-    if (json === null) return this.invalid(source, sourceId, originalOutput, parseError);
-    const parsed = parseReviewReport(json);
-    if (!parsed.ok) return this.invalid(source, sourceId, originalOutput, parseError);
+    const fileOutput = await readOutputFile(outputPath);
+    if (fileOutput?.validation.ok === true) {
+      return {
+        artifact: makeArtifact({ sourceId, agentKind: source.kind, content: fileOutput.content }),
+        outcome: { slot: source.slot, kind: "collected", detail: null, repairs: 1 },
+      };
+    }
+    const terminalValidation = parseOutput(repaired.output, markers, false);
+    if (!terminalValidation.ok) return this.invalid(source, sourceId, originalOutput, parseError);
 
     return {
       artifact: makeArtifact({ sourceId, agentKind: source.kind, content: repaired.output }),

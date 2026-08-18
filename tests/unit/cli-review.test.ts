@@ -74,10 +74,12 @@ describe("start command", () => {
     const store = new RunStore(root);
     const runs = await store.listRuns();
     expect(runs).toHaveLength(1);
-    expect(runs[0]?.stage).toBe("reviewing");
+    expect(runs[0]?.stage).toBe("consensus");
 
     const runDir = join(root, "projects", runs[0]!.projectHash, "runs", runs[0]!.runId);
     expect(await readFile(join(runDir, "raw", "a.txt"), "utf8")).toBe(validOutput);
+    expect(JSON.parse(await readFile(join(runDir, "normalized", "findings.json"), "utf8"))).toEqual([]);
+    expect(JSON.parse(await readFile(join(runDir, "consensus.json"), "utf8"))).toEqual({ items: [] });
   });
 });
 
@@ -86,8 +88,10 @@ describe("import command", () => {
     const root = await tempRoot();
     const fileA = join(root, "a.md");
     const fileB = join(root, "b.json");
-    await writeFile(fileA, "report A content\n", "utf8");
-    await writeFile(fileB, '{"findings":[]}\n', "utf8");
+    const reportA = '{"schemaVersion":1,"findings":[]}\n';
+    const reportB = '```json\n{"schemaVersion":1,"findings":[]}\n```\n';
+    await writeFile(fileA, reportA, "utf8");
+    await writeFile(fileB, reportB, "utf8");
 
     const { deps, out } = makeDeps(root);
     const code = await main(["import", "--agent-a", fileA, "--agent-b", fileB], deps);
@@ -96,9 +100,31 @@ describe("import command", () => {
 
     const store = new RunStore(root);
     const runs = await store.listRuns();
+    expect(runs[0]?.stage).toBe("consensus");
     const runDir = join(root, "projects", runs[0]!.projectHash, "runs", runs[0]!.runId);
-    expect(await readFile(join(runDir, "raw", "a.txt"), "utf8")).toBe("report A content\n");
-    expect(await readFile(join(runDir, "raw", "b.txt"), "utf8")).toBe('{"findings":[]}\n');
+    expect(await readFile(join(runDir, "raw", "a.txt"), "utf8")).toBe(reportA);
+    expect(await readFile(join(runDir, "raw", "b.txt"), "utf8")).toBe(reportB);
+    expect(JSON.parse(await readFile(join(runDir, "consensus.json"), "utf8"))).toEqual({ items: [] });
+  });
+
+  it("preserves raw prose and fails closed without consensus", async () => {
+    const root = await tempRoot();
+    const fileA = join(root, "a.txt");
+    const fileB = join(root, "b.json");
+    await writeFile(fileA, "plain prose report\n", "utf8");
+    await writeFile(fileB, '{"schemaVersion":1,"findings":[]}\n', "utf8");
+
+    const { deps, err } = makeDeps(root);
+    const code = await main(["import", "--agent-a", fileA, "--agent-b", fileB], deps);
+
+    expect(code).toBe(1);
+    expect(err()).toMatch(/report A.*supported formats/i);
+    const store = new RunStore(root);
+    const runs = await store.listRuns();
+    expect(runs[0]?.stage).toBe("reviewing");
+    const runDir = join(root, "projects", runs[0]!.projectHash, "runs", runs[0]!.runId);
+    expect(await readFile(join(runDir, "raw", "a.txt"), "utf8")).toBe("plain prose report\n");
+    await expect(readFile(join(runDir, "consensus.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("exits 1 when a report file is missing", async () => {

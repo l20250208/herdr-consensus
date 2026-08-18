@@ -2,15 +2,26 @@
   "name": "herdr-consensus",
   "version": "0.1.0",
   "description": "Multi-agent review consensus and human adjudication layer for Herdr.",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "herdr-consensus": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "herdr-plugin.toml",
+    "README.md",
+    "LICENSE",
+    "schemas",
+    "prompts"
+  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "tsup",
+    "prepack": "pnpm run build",
+    "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

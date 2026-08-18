@@ -15,6 +15,8 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 600_000;
 const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
 const DEFAULT_GET_TIMEOUT_MS = 15_000;
 const GRACE_MS = 5_000;
+const DEFAULT_START_RETRY_DELAY_MS = 250;
+const MAX_START_ATTEMPTS = 3;
 
 export interface HerdrAgentAdapterOptions {
   /** Path to the `herdr` binary. Defaults to `HERDR_BIN_PATH` then `herdr`. */
@@ -23,6 +25,8 @@ export interface HerdrAgentAdapterOptions {
   run?: Runner;
   /** Extra environment passed to every herdr invocation (e.g. plugin context). */
   env?: Record<string, string | undefined>;
+  /** Short delay between transient pane-shell readiness retries. */
+  startRetryDelayMs?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -44,6 +48,7 @@ function normalizeStatus(value: unknown): AgentStatus {
 
 interface AgentFields {
   agent?: unknown;
+  name?: unknown;
   agent_status?: unknown;
   pane_id?: unknown;
   workspace_id?: unknown;
@@ -64,7 +69,7 @@ function agentFromResult(result: unknown): AgentInfo | null {
   const raw = obj as AgentFields;
   if (typeof raw.agent !== "string") return null;
   return {
-    name: raw.agent,
+    name: typeof raw.name === "string" ? raw.name : raw.agent,
     status: normalizeStatus(raw.agent_status),
     paneId: typeof raw.pane_id === "string" ? raw.pane_id : null,
     workspaceId: typeof raw.workspace_id === "string" ? raw.workspace_id : null,
@@ -96,7 +101,8 @@ function agentsFromListResult(result: unknown): AgentInfo[] {
 
 function extractPaneId(result: unknown): string | null {
   if (!isRecord(result)) return null;
-  const pane = (result as { pane?: unknown }).pane;
+  const pane = (result as { pane?: unknown; root_pane?: unknown }).root_pane
+    ?? (result as { pane?: unknown }).pane;
   if (!isRecord(pane)) return null;
   const paneId = (pane as { pane_id?: unknown }).pane_id;
   return typeof paneId === "string" ? paneId : null;
@@ -130,11 +136,13 @@ export class HerdrAgentAdapter {
   private readonly herdrBin: string;
   private readonly run: Runner;
   private readonly env: Record<string, string | undefined>;
+  private readonly startRetryDelayMs: number;
 
   constructor(options: HerdrAgentAdapterOptions = {}) {
     this.herdrBin = options.herdrBin ?? process.env.HERDR_BIN_PATH ?? "herdr";
     this.run = options.run ?? spawnRunner;
     this.env = options.env ?? {};
+    this.startRetryDelayMs = options.startRetryDelayMs ?? DEFAULT_START_RETRY_DELAY_MS;
   }
 
   private runArgs(args: readonly string[], timeoutMs: number): Promise<SpawnResult> {
@@ -153,7 +161,7 @@ export class HerdrAgentAdapter {
       throw new HerdrError("spawn", `failed to run herdr: ${result.error}`);
     }
 
-    const envelope = parseEnvelope(result.stdout);
+    const envelope = parseEnvelope(result.stdout) ?? parseEnvelope(result.stderr);
     if (envelope === null) {
       if (result.code !== 0) {
         throw new HerdrError(
@@ -173,13 +181,17 @@ export class HerdrAgentAdapter {
     return envelope.result ?? null;
   }
 
-  async splitPane(input: { cwd: string }): Promise<{ paneId: string }> {
+  async splitPane(input: { cwd: string; env?: Record<string, string> }): Promise<{ paneId: string }> {
+    const args = ["tab", "create", "--no-focus", "--cwd", input.cwd, "--label", "Herdr Consensus"];
+    for (const [key, value] of Object.entries(input.env ?? {}).sort(([left], [right]) => left.localeCompare(right))) {
+      args.push("--env", `${key}=${value}`);
+    }
     const result = await this.runHerdr(
-      ["pane", "split", "--current", "--no-focus", "--cwd", input.cwd],
+      args,
       DEFAULT_GET_TIMEOUT_MS,
     );
     const paneId = extractPaneId(result);
-    if (paneId === null) throw new HerdrError("protocol", "pane split returned no pane id");
+    if (paneId === null) throw new HerdrError("protocol", "tab create returned no root pane id");
     return { paneId };
   }
 
@@ -197,21 +209,33 @@ export class HerdrAgentAdapter {
 
   async startAgent(input: StartAgentInput): Promise<AgentInfo> {
     const timeoutMs = input.timeoutMs ?? DEFAULT_START_TIMEOUT_MS;
-    const args = [
-      "agent",
-      "start",
-      input.name,
-      "--kind",
-      input.kind,
-      "--pane",
-      input.paneId,
-      "--timeout",
-      String(timeoutMs),
-    ];
-    const result = await this.runHerdr(args, timeoutMs + GRACE_MS);
-    const agent = agentFromResult(result);
-    if (agent === null) throw new HerdrError("protocol", "agent start returned no agent info");
-    return agent;
+    const deadline = Date.now() + timeoutMs;
+    for (let attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
+      const remainingMs = Math.max(1, deadline - Date.now());
+      const args = [
+        "agent",
+        "start",
+        input.name,
+        "--kind",
+        input.kind,
+        "--pane",
+        input.paneId,
+        "--timeout",
+        String(remainingMs),
+      ];
+      try {
+        const result = await this.runHerdr(args, remainingMs + GRACE_MS);
+        const agent = agentFromResult(result);
+        if (agent === null) throw new HerdrError("protocol", "agent start returned no agent info");
+        return agent;
+      } catch (error) {
+        const transientPaneReadiness = error instanceof HerdrError && error.message.includes("not an available shell");
+        const hasRetryBudget = attempt < MAX_START_ATTEMPTS && Date.now() + this.startRetryDelayMs < deadline;
+        if (!transientPaneReadiness || !hasRetryBudget) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, this.startRetryDelayMs));
+      }
+    }
+    throw new HerdrError("timeout", `agent ${input.name} did not start before its timeout`, "timeout");
   }
 
   async wait(input: WaitInput): Promise<AgentStatus> {
@@ -230,7 +254,7 @@ export class HerdrAgentAdapter {
     let output = "";
     const readOutput = async (): Promise<void> => {
       try {
-        output = await this.read(input.target, { lines: 200 });
+        output = await this.read(input.target, { lines: 4000 });
       } catch {
         // Reading is best-effort context for the outcome.
       }
@@ -262,7 +286,7 @@ export class HerdrAgentAdapter {
   }
 
   async read(target: string, options: { lines?: number } = {}): Promise<string> {
-    const args = ["agent", "read", target, "--format", "text"];
+    const args = ["agent", "read", target, "--source", "recent-unwrapped", "--format", "text"];
     if (options.lines !== undefined) args.push("--lines", String(options.lines));
     const result = await this.runArgs(args, DEFAULT_GET_TIMEOUT_MS);
     if (!result.ok) throw new HerdrError("spawn", `failed to run herdr read: ${result.error}`);

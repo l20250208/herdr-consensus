@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://herdr-consensus.dev/schemas/final-report.v1.json",
+  "title": "Herdr Consensus final report (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "generatedAt",
+    "run",
+    "consensus",
+    "validations",
+    "arbitration",
+    "arbitrationMetadata",
+    "decisions",
+    "fixPlan",
+    "gitDiffSummary",
+    "changedPaths",
+    "pathPolicy",
+    "targetedChecks",
+    "regression"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runId": { "type": "string" },
+    "generatedAt": { "type": "string" },
+    "run": { "type": "object" },
+    "consensus": {
+      "type": "object",
+      "required": ["items"],
+      "properties": { "items": { "type": "array" } }
+    },
+    "validations": { "type": "array" },
+    "arbitration": { "type": "array" },
+    "arbitrationMetadata": {
+      "type": "object",
+      "required": ["reviewAgentKinds", "agentKind", "model", "provider", "independence"],
+      "properties": {
+        "reviewAgentKinds": { "type": "array", "items": { "type": "string" } },
+        "agentKind": { "type": "string" },
+        "model": { "type": ["string", "null"] },
+        "provider": { "type": ["string", "null"] },
+        "independence": { "enum": ["strong", "weak", "unknown"] }
+      }
+    },
+    "decisions": { "type": "array" },
+    "fixPlan": {
+      "type": "object",
+      "required": ["runId", "version", "items", "createdAt", "sha256"]
+    },
+    "gitDiffSummary": { "type": ["string", "null"] },
+    "changedPaths": { "type": "array", "items": { "type": "string" } },
+    "pathPolicy": {
+      "type": "object",
+      "required": ["ok", "violations"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "violations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "targetedChecks": { "type": "array" },
+    "regression": {
+      "type": "object",
+      "required": ["argv", "approvedByUser", "startedAt", "finishedAt", "exitCode", "stdout", "stderr", "workspaceSnapshotSha256"],
+      "properties": {
+        "argv": { "type": "array", "items": { "type": "string" } },
+        "approvedByUser": { "const": true },
+        "startedAt": { "type": "string" },
+        "finishedAt": { "type": "string" },
+        "exitCode": { "type": ["integer", "null"] },
+        "stdout": { "type": "string" },
+        "stderr": { "type": "string" },
+        "workspaceSnapshotSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}

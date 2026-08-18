@@ -23,6 +23,20 @@ describe("extractReportJson", () => {
     const text = `${DEFAULT_MARKERS.start}\n{"findings":[]}`;
     expect(extractReportJson(text, DEFAULT_MARKERS)).toBeNull();
   });
+
+  it("extracts the latest report after an echoed empty marker template", () => {
+    const text = [
+      DEFAULT_MARKERS.start,
+      "",
+      DEFAULT_MARKERS.end,
+      "agent response",
+      DEFAULT_MARKERS.start,
+      '{"schemaVersion":1,"findings":[]}',
+      DEFAULT_MARKERS.end,
+    ].join("\n");
+
+    expect(extractReportJson(text, DEFAULT_MARKERS)).toBe('{"schemaVersion":1,"findings":[]}');
+  });
 });
 
 describe("parseReviewReport", () => {
@@ -50,6 +64,24 @@ describe("parseReviewReport", () => {
     const result = parseReviewReport('{"findings":[]}');
     expect(result.ok).toBe(false);
   });
+
+  it("normalizes terminal hard wraps only inside JSON strings", () => {
+    const result = parseReviewReport(`{
+      "schemaVersion": 1,
+      "findings": [{"title":"escaped \\\"quote\\\" and long
+        wrapped text","evidence":[]}]
+    }`);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.report.findings[0]).toMatchObject({ title: 'escaped "quote" and long wrapped text' });
+    }
+  });
+
+  it("still rejects malformed structure outside JSON strings", () => {
+    const result = parseReviewReport('{"schemaVersion":1,\n"findings":[}');
+    expect(result.ok).toBe(false);
+  });
 });
 
 describe("buildRepairPrompt", () => {
@@ -57,5 +89,6 @@ describe("buildRepairPrompt", () => {
     const prompt = buildRepairPrompt("JSON parse error");
     expect(prompt).toContain("JSON parse error");
     expect(prompt).toContain(DEFAULT_MARKERS.start);
+    expect(prompt).toContain("HERDR_CONSENSUS_OUTPUT");
   });
 });

@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 describe("HerdrAgentAdapter (fake herdr executable)", () => {
-  it("splits a pane and returns the pane id", async () => {
+  it("creates an isolated tab and returns the root pane id", async () => {
     const { adapter } = await installFakeHerdr();
     const { paneId } = await adapter.splitPane({ cwd: "/tmp/repo" });
     expect(paneId).toBe("w9:p9");
@@ -55,9 +55,9 @@ describe("HerdrAgentAdapter (fake herdr executable)", () => {
   });
 
   it("starts an agent and returns its info", async () => {
-    const { adapter } = await installFakeHerdr({ agentName: "codex" });
+    const { adapter } = await installFakeHerdr({ agentKind: "codex", stableName: "reviewer" });
     const agent = await adapter.startAgent({ name: "reviewer", kind: "codex", paneId: "p9" });
-    expect(agent.name).toBe("codex");
+    expect(agent.name).toBe("reviewer");
     expect(agent.status).toBe("idle");
   });
 
@@ -96,6 +96,12 @@ describe("HerdrAgentAdapter (fake herdr executable)", () => {
     const { adapter } = await installFakeHerdr({ prompt: "exit" });
     const result = await adapter.prompt({ target: "p1", text: "review this" });
     expect(result).toMatchObject({ kind: "exited" });
+  });
+
+  it("parses herdr error envelopes from stderr", async () => {
+    const { adapter } = await installFakeHerdr({ prompt: "stderr_stalled", read: "partial output" });
+    const result = await adapter.prompt({ target: "p1", text: "review this" });
+    expect(result).toEqual({ kind: "stalled", output: "partial output", message: "prompt stalled on stderr" });
   });
 
   it("waits and returns the settled status", async () => {
