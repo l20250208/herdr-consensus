@@ -5,6 +5,12 @@ min_herdr_version = "0.8.0"
 description = "Turn two independent coding-agent reviews of the same project into one verifiable, adjudicable, traceable fix plan."
 platforms = ["macos"]
 
+[[build]]
+command = ["pnpm", "install"]
+
+[[build]]
+command = ["pnpm", "run", "build"]
+
 [[actions]]
 id = "new-review"
 title = "New consensus review"

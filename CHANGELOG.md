@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 2026-08-19 — 支持 `herdr plugin install` 从 GitHub 安装
+
+- **修改文件**：`herdr-plugin.toml`（新增 `[[build]]`：`pnpm install` + `pnpm run build`）、`tests/unit/manifest.test.ts`（更新为验证双路径构建）、`DESIGN.md`（§12.2 第 20 条同步）、`CHANGELOG.md`。
+- **修改原因**：原 manifest 为 npm 打包优化移除了安装期 build，且 `dist/` 被 gitignore，导致 `herdr plugin install l20250208/herdr-consensus` 克隆后 action 运行时 `node dist/cli.js` 找不到文件。现在通过 manifest 的 `[[build]]` 让 Herdr 在安装期自动构建，同时 npm 路径仍由 `prepack` 预构建，两条安装路径均可用。
+- **验证**：`smol-toml` 解析 manifest 通过（platforms=["macos"]、2 个 build 步骤、4 个 action）；manifest 单元测试更新后待随完整套件重跑。
+- **下一位维护者注意**：`herdr plugin install` 要求安装者本机有 Node 与 pnpm（README 已声明）；`[[build]]` 只影响 Git 安装路径，不影响 npm 安装。
+
 ### 2026-08-18 — 独立维护者外部签核完成，阶段 12 全部发布门槛通过
 
 - **修改文件**：`DESIGN.md`（阶段 12 状态改为 `已完成`、头部状态/下一阶段更新）、`README.md`（验证矩阵新增独立维护者签核行）、`CHANGELOG.md`。
