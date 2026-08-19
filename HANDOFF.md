@@ -1,7 +1,7 @@
 # Herdr Consensus AI 交接文档
 
 > 交接时间：2026-08-18（Asia/Shanghai）  
-> 工作目录：`/Users/Admin/Desktop/herdr-consensus`  
+> 工作目录：`<repo>`（本仓库根目录）
 > 当前分支：`main`（用户明确选择在现有脏工作区原地继续）  
 > 当前结论：实现已继续推进，但尚不可宣布发布完成；需第三轮独立代码审查及最新发布包复验。
 
@@ -261,7 +261,7 @@
 ## 9. 推荐接力命令
 
 ```bash
-cd /Users/Admin/Desktop/herdr-consensus
+cd <repo>
 sed -n '1,240p' AGENTS.md
 sed -n '1,760p' DESIGN.md
 git status --short
